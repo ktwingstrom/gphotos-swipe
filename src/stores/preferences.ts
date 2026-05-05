@@ -1,39 +1,43 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
-import { useAuthStore } from '@/stores/auth'
+import { ref, watch } from 'vue'
 
 type ReviewOrder = 'random' | 'chronological' | 'chronological-desc'
+export type ContentFilter = 'any' | 'IMAGE' | 'VIDEO'
+export type MonthSortOrder = 'recent' | 'oldest'
 
 interface StoredPreferences {
   reviewOrder: ReviewOrder
   albumHotkeys: Record<string, string>
   lastUsedAlbumId: string | null
+  contentFilter: ContentFilter
+  monthSortOrder: MonthSortOrder
+  hideCompleted: boolean
+  completedMonths: string[]
 }
 
-const STORAGE_PREFIX = 'immich-swipe-preferences'
+const STORAGE_KEY = 'gphotos-swipe-preferences'
 
 export const usePreferencesStore = defineStore('preferences', () => {
-  const authStore = useAuthStore()
-
   const reviewOrder = ref<ReviewOrder>('random')
   const albumHotkeys = ref<Record<string, string>>({})
   const lastUsedAlbumId = ref<string | null>(null)
-
+  const contentFilter = ref<ContentFilter>('any')
+  const monthSortOrder = ref<MonthSortOrder>('recent')
+  const hideCompleted = ref<boolean>(false)
+  const completedMonths = ref<string[]>([])
   const initialized = ref(false)
-
-  const storageKey = computed(() => {
-    const server = authStore.serverUrl || 'unknown-server'
-    const user = authStore.currentUserName || 'default-user'
-    return `${STORAGE_PREFIX}:${server}:${user}`
-  })
 
   function loadFromStorage() {
     initialized.value = false
-    const raw = localStorage.getItem(storageKey.value)
+    const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) {
       reviewOrder.value = 'random'
       albumHotkeys.value = {}
       lastUsedAlbumId.value = null
+      contentFilter.value = 'any'
+      monthSortOrder.value = 'recent'
+      hideCompleted.value = false
+      completedMonths.value = []
       initialized.value = true
       return
     }
@@ -43,6 +47,10 @@ export const usePreferencesStore = defineStore('preferences', () => {
       reviewOrder.value = parsed.reviewOrder ?? 'random'
       albumHotkeys.value = parsed.albumHotkeys ?? {}
       lastUsedAlbumId.value = parsed.lastUsedAlbumId ?? null
+      contentFilter.value = parsed.contentFilter ?? 'any'
+      monthSortOrder.value = parsed.monthSortOrder ?? 'recent'
+      hideCompleted.value = parsed.hideCompleted ?? false
+      completedMonths.value = parsed.completedMonths ?? []
     } catch (e) {
       console.error('Failed to parse preferences from localStorage', e)
     } finally {
@@ -56,8 +64,12 @@ export const usePreferencesStore = defineStore('preferences', () => {
       reviewOrder: reviewOrder.value,
       albumHotkeys: albumHotkeys.value,
       lastUsedAlbumId: lastUsedAlbumId.value,
+      contentFilter: contentFilter.value,
+      monthSortOrder: monthSortOrder.value,
+      hideCompleted: hideCompleted.value,
+      completedMonths: completedMonths.value,
     }
-    localStorage.setItem(storageKey.value, JSON.stringify(payload))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
   }
 
   function setReviewOrder(order: ReviewOrder) {
@@ -65,10 +77,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   }
 
   function setHotkey(key: string, albumId: string) {
-    albumHotkeys.value = {
-      ...albumHotkeys.value,
-      [key]: albumId,
-    }
+    albumHotkeys.value = { ...albumHotkeys.value, [key]: albumId }
   }
 
   function clearHotkey(key: string) {
@@ -80,12 +89,33 @@ export const usePreferencesStore = defineStore('preferences', () => {
     lastUsedAlbumId.value = albumId
   }
 
-  // Load on init and whenever user/server changes
-  watch(storageKey, () => loadFromStorage(), { immediate: true })
+  function setContentFilter(filter: ContentFilter) {
+    contentFilter.value = filter
+  }
 
-  // Persist on changes
+  function setMonthSortOrder(order: MonthSortOrder) {
+    monthSortOrder.value = order
+  }
+
+  function setHideCompleted(hide: boolean) {
+    hideCompleted.value = hide
+  }
+
+  function markMonthComplete(year: number, month: number) {
+    const key = `${year}-${month}`
+    if (!completedMonths.value.includes(key)) {
+      completedMonths.value = [...completedMonths.value, key]
+    }
+  }
+
+  function isMonthComplete(year: number, month: number): boolean {
+    return completedMonths.value.includes(`${year}-${month}`)
+  }
+
+  loadFromStorage()
+
   watch(
-    [reviewOrder, albumHotkeys, lastUsedAlbumId, storageKey],
+    [reviewOrder, albumHotkeys, lastUsedAlbumId, contentFilter, monthSortOrder, hideCompleted, completedMonths],
     () => persist(),
     { deep: true }
   )
@@ -94,9 +124,18 @@ export const usePreferencesStore = defineStore('preferences', () => {
     reviewOrder,
     albumHotkeys,
     lastUsedAlbumId,
+    contentFilter,
+    monthSortOrder,
+    hideCompleted,
+    completedMonths,
     setReviewOrder,
     setHotkey,
     clearHotkey,
     setLastUsedAlbumId,
+    setContentFilter,
+    setMonthSortOrder,
+    setHideCompleted,
+    markMonthComplete,
+    isMonthComplete,
   }
 })

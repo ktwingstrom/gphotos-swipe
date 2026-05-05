@@ -2,18 +2,23 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
+interface StreakData {
+  currentStreak: number
+  bestStreak: number
+  lastActiveDate: string
+  activeDates: string[]
+}
+
 export const useUiStore = defineStore('ui', () => {
   const authStore = useAuthStore()
-  // Dark mode state - persisted to localStorage
+
   const isDarkMode = ref<boolean>(true)
   const skipVideos = ref<boolean>(false)
 
-  // Initialize from localStorage
   const storedTheme = localStorage.getItem('immich-swipe-theme')
   if (storedTheme !== null) {
     isDarkMode.value = storedTheme === 'dark'
   } else {
-    // Default to system preference
     isDarkMode.value = window.matchMedia('(prefers-color-scheme: dark)').matches
   }
 
@@ -22,27 +27,19 @@ export const useUiStore = defineStore('ui', () => {
     skipVideos.value = storedSkipVideos === 'true'
   }
 
-  // Watch and persist changes
-  watch(isDarkMode, (newValue) => {
-    localStorage.setItem('immich-swipe-theme', newValue ? 'dark' : 'light')
+  watch(isDarkMode, (v) => {
+    localStorage.setItem('immich-swipe-theme', v ? 'dark' : 'light')
+  })
+  watch(skipVideos, (v) => {
+    localStorage.setItem('immich-swipe-skip-videos', v ? 'true' : 'false')
   })
 
-  watch(skipVideos, (newValue) => {
-    localStorage.setItem('immich-swipe-skip-videos', newValue ? 'true' : 'false')
-  })
-
-  function toggleDarkMode() {
-    isDarkMode.value = !isDarkMode.value
-  }
-
-  function toggleSkipVideos() {
-    skipVideos.value = !skipVideos.value
-  }
+  function toggleDarkMode() { isDarkMode.value = !isDarkMode.value }
+  function toggleSkipVideos() { skipVideos.value = !skipVideos.value }
 
   // Loading state
   const isLoading = ref<boolean>(false)
   const loadingMessage = ref<string>('')
-
   function setLoading(loading: boolean, message: string = '') {
     isLoading.value = loading
     loadingMessage.value = message
@@ -52,18 +49,14 @@ export const useUiStore = defineStore('ui', () => {
   const toastMessage = ref<string>('')
   const toastType = ref<'success' | 'error' | 'info'>('info')
   const showToast = ref<boolean>(false)
-
   function toast(message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 3000) {
     toastMessage.value = message
     toastType.value = type
     showToast.value = true
-
-    setTimeout(() => {
-      showToast.value = false
-    }, duration)
+    setTimeout(() => { showToast.value = false }, duration)
   }
 
-  // Stats (persisted per user/server)
+  // Stats
   const keptCount = ref<number>(0)
   const deletedCount = ref<number>(0)
   const statsInitialized = ref(false)
@@ -82,16 +75,11 @@ export const useUiStore = defineStore('ui', () => {
       statsInitialized.value = true
       return
     }
-
     try {
       const parsed = JSON.parse(raw) as { keptCount?: number; deletedCount?: number }
-      const kept = typeof parsed.keptCount === 'number' && Number.isFinite(parsed.keptCount) ? parsed.keptCount : 0
-      const deleted =
-        typeof parsed.deletedCount === 'number' && Number.isFinite(parsed.deletedCount) ? parsed.deletedCount : 0
-      keptCount.value = kept
-      deletedCount.value = deleted
-    } catch (e) {
-      console.error('Failed to parse stats from localStorage', e)
+      keptCount.value = typeof parsed.keptCount === 'number' && Number.isFinite(parsed.keptCount) ? parsed.keptCount : 0
+      deletedCount.value = typeof parsed.deletedCount === 'number' && Number.isFinite(parsed.deletedCount) ? parsed.deletedCount : 0
+    } catch {
       keptCount.value = 0
       deletedCount.value = 0
     } finally {
@@ -101,38 +89,56 @@ export const useUiStore = defineStore('ui', () => {
 
   function persistStats() {
     if (!statsInitialized.value) return
-    localStorage.setItem(
-      statsStorageKey.value,
-      JSON.stringify({ keptCount: keptCount.value, deletedCount: deletedCount.value })
-    )
+    localStorage.setItem(statsStorageKey.value, JSON.stringify({ keptCount: keptCount.value, deletedCount: deletedCount.value }))
   }
 
   watch(statsStorageKey, () => loadStats(), { immediate: true })
   watch([keptCount, deletedCount, statsStorageKey], () => persistStats())
 
-  function incrementKept() {
-    keptCount.value++
+  function incrementKept() { keptCount.value++ }
+  function decrementKept() { if (keptCount.value > 0) keptCount.value-- }
+  function incrementDeleted() { deletedCount.value++ }
+  function decrementDeleted() { if (deletedCount.value > 0) deletedCount.value-- }
+  function resetStats() { keptCount.value = 0; deletedCount.value = 0 }
+
+  // Streak tracking
+  const streak = ref<StreakData>({
+    currentStreak: 0,
+    bestStreak: 0,
+    lastActiveDate: '',
+    activeDates: [],
+  })
+
+  const storedStreak = localStorage.getItem('immich-swipe-streak')
+  if (storedStreak) {
+    try {
+      const parsed = JSON.parse(storedStreak) as StreakData
+      if (parsed && typeof parsed.currentStreak === 'number') {
+        streak.value = parsed
+      }
+    } catch {}
   }
 
-  function decrementKept() {
-    if (keptCount.value > 0) {
-      keptCount.value--
+  function persistStreak() {
+    localStorage.setItem('immich-swipe-streak', JSON.stringify(streak.value))
+  }
+
+  function recordActivity() {
+    const today = new Date().toISOString().slice(0, 10)
+    if (streak.value.lastActiveDate === today) return
+
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    if (streak.value.lastActiveDate === yesterday) {
+      streak.value.currentStreak++
+    } else {
+      streak.value.currentStreak = 1
     }
-  }
-
-  function incrementDeleted() {
-    deletedCount.value++
-  }
-
-  function decrementDeleted() {
-    if (deletedCount.value > 0) {
-      deletedCount.value--
+    streak.value.bestStreak = Math.max(streak.value.bestStreak, streak.value.currentStreak)
+    streak.value.lastActiveDate = today
+    if (!streak.value.activeDates.includes(today)) {
+      streak.value.activeDates = [...streak.value.activeDates, today]
     }
-  }
-
-  function resetStats() {
-    keptCount.value = 0
-    deletedCount.value = 0
+    persistStreak()
   }
 
   return {
@@ -154,5 +160,7 @@ export const useUiStore = defineStore('ui', () => {
     resetStats,
     skipVideos,
     toggleSkipVideos,
+    streak,
+    recordActivity,
   }
 })

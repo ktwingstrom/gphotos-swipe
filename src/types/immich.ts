@@ -74,6 +74,27 @@ export interface MetadataSearchRequest {
   size?: number
   order?: 'asc' | 'desc'
   assetType?: ('IMAGE' | 'VIDEO')[]
+  takenAfter?: string
+  takenBefore?: string
+}
+
+export interface TimeBucket {
+  timeBucket: string
+  count: number
+}
+
+export interface ImmichMemory {
+  id: string
+  type: string
+  data: { year: number }
+  assets: ImmichAsset[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DuplicateGroup {
+  duplicateId: string
+  assets: ImmichAsset[]
 }
 
 export interface MetadataSearchResponse {

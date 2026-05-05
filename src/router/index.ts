@@ -1,13 +1,19 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { useGoogleAuthStore } from '@/stores/googleAuth'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: () => import('@/views/HomeView.vue'),
+      name: 'menu',
+      component: () => import('@/views/MenuView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/swipe',
+      name: 'swipe',
+      component: () => import('@/views/SwipeView.vue'),
       meta: { requiresAuth: true },
     },
     {
@@ -15,21 +21,26 @@ const router = createRouter({
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
     },
-    {
-      path: '/select-user',
-      name: 'select-user',
-      component: () => import('@/views/UserSelectView.vue'),
-    },
   ],
 })
 
-// Navigation guard
-router.beforeEach((to, _from, next) => {
-  const authStore = useAuthStore()
+router.beforeEach(async (to, _from, next) => {
+  const authStore = useGoogleAuthStore()
 
-  // Logged in -> home
+  // Handle OAuth callback — Google redirects to root with ?code=...
+  const code = to.query.code as string | undefined
+  if (code) {
+    const success = await authStore.handleOAuthCallback(code)
+    if (success) {
+      next({ path: '/', replace: true })
+    } else {
+      next({ path: '/login', query: { error: 'auth_failed' }, replace: true })
+    }
+    return
+  }
+
   if (authStore.isLoggedIn) {
-    if (to.path === '/login' || to.path === '/select-user') {
+    if (to.path === '/login') {
       next('/')
     } else {
       next()
@@ -37,60 +48,11 @@ router.beforeEach((to, _from, next) => {
     return
   }
 
-  // Not logged in -> routing based on .env
-  
-  // Accessing login page
-  if (to.path === '/login') {
-    // .env -> redirect
-    if (authStore.hasEnvConfig) {
-      if (authStore.hasSingleEnvUser) {
-        authStore.autoLoginSingleUser()
-        next('/')
-      } else {
-        // multi user -> select
-        next('/select-user')
-      }
-    } else {
-      // No .env -> login page
-      next()
-    }
-    return
-  }
-
-  // Accessing selection
-  if (to.path === '/select-user') {
-    if (!authStore.hasEnvConfig) {
-      // No .env -> login page
-      next('/login')
-    } else if (authStore.hasSingleEnvUser) {
-      // Single user -> auto login
-      authStore.autoLoginSingleUser()
-      next('/')
-    } else {
-      // multi user -> allow selection
-      next()
-    }
-    return
-  }
-
-  // Protected routes
   if (to.meta.requiresAuth) {
-    if (authStore.hasEnvConfig) {
-      if (authStore.hasSingleEnvUser) {
-        authStore.autoLoginSingleUser()
-        next()
-      } else {
-        // multi user -> selection
-        next('/select-user')
-      }
-    } else {
-      // No .env -> login page
-      next('/login')
-    }
+    next('/login')
     return
   }
 
-  // Default -> allow
   next()
 })
 

@@ -8,7 +8,13 @@ import type {
   ImmichAlbum,
   MetadataSearchRequest,
   MetadataSearchResponse,
+  TimeBucket,
+  ImmichMemory,
+  DuplicateGroup,
 } from '@/types/immich'
+
+export type SwipeMode = 'random' | 'recents' | 'month' | 'on-this-day' | 'duplicates'
+export type ContentFilter = 'any' | 'IMAGE' | 'VIDEO'
 
 export function useImmich() {
   const authStore = useAuthStore()
@@ -583,12 +589,166 @@ export function useImmich() {
 
   const canUndo = computed(() => actionHistory.value.length > 0)
 
+  // --- New API methods ---
+
+  const modeTotal = ref<number>(0)
+
+  async function fetchTimeBuckets(): Promise<TimeBucket[]> {
+    try {
+      const result = await apiRequest<TimeBucket[]>('/timeline/buckets?size=MONTH')
+      return Array.isArray(result) ? result : []
+    } catch {
+      return []
+    }
+  }
+
+  async function fetchAssetsByMonth(year: number, month: number): Promise<ImmichAsset[]> {
+    const from = new Date(Date.UTC(year, month - 1, 1)).toISOString()
+    const to = new Date(Date.UTC(year, month, 1)).toISOString()
+    try {
+      const body: MetadataSearchRequest = {
+        takenAfter: from,
+        takenBefore: to,
+        order: 'desc',
+        size: 1000,
+        page: 1,
+      }
+      const response = await apiRequest<MetadataSearchResponse>('/search/metadata', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      if (Array.isArray(response)) return response
+      return response?.assets?.items ?? response?.items ?? []
+    } catch {
+      return []
+    }
+  }
+
+  async function fetchMemoryAssets(): Promise<ImmichAsset[]> {
+    try {
+      const memories = await apiRequest<ImmichMemory[]>('/memories')
+      if (!Array.isArray(memories)) return []
+      return memories
+        .filter(m => m.type === 'on_this_day')
+        .flatMap(m => m.assets || [])
+    } catch {
+      return []
+    }
+  }
+
+  async function fetchDuplicates(): Promise<DuplicateGroup[]> {
+    try {
+      const result = await apiRequest<DuplicateGroup[]>('/duplicates')
+      return Array.isArray(result) ? result : []
+    } catch {
+      return []
+    }
+  }
+
+  async function fetchRecentAssets(): Promise<ImmichAsset[]> {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
+    const now = new Date().toISOString()
+    try {
+      const body: MetadataSearchRequest = {
+        takenAfter: ninetyDaysAgo,
+        takenBefore: now,
+        order: 'desc',
+        size: 1000,
+        page: 1,
+      }
+      const response = await apiRequest<MetadataSearchResponse>('/search/metadata', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      if (Array.isArray(response)) return response
+      return response?.assets?.items ?? response?.items ?? []
+    } catch {
+      return []
+    }
+  }
+
+  async function fetchFilteredRandom(contentFilter: 'IMAGE' | 'VIDEO'): Promise<ImmichAsset | null> {
+    for (let attempt = 0; attempt < RANDOM_MAX_ATTEMPTS; attempt++) {
+      const page = Math.floor(Math.random() * 20) + 1
+      try {
+        const body: MetadataSearchRequest = {
+          assetType: [contentFilter],
+          size: RANDOM_BATCH_SIZE,
+          page,
+        }
+        const response = await apiRequest<MetadataSearchResponse>('/search/metadata', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        })
+        const items = Array.isArray(response)
+          ? response
+          : response?.assets?.items ?? response?.items ?? []
+        const candidate = items.find(isReviewable)
+        if (candidate) return candidate
+      } catch {
+        continue
+      }
+    }
+    throw new Error('No unreviewed assets found matching filter.')
+  }
+
+  async function loadMode(
+    mode: SwipeMode,
+    options?: { year?: number; month?: number; contentFilter?: ContentFilter }
+  ): Promise<void> {
+    try {
+      uiStore.setLoading(true, 'Loading...')
+      error.value = null
+      resetReviewFlow()
+      modeTotal.value = 0
+
+      if (mode === 'month' && options?.year && options?.month) {
+        const assets = await fetchAssetsByMonth(options.year, options.month)
+        const unreviewed = assets.filter(isReviewable)
+        pendingAssets.value = [...unreviewed]
+        modeTotal.value = unreviewed.length
+      } else if (mode === 'on-this-day') {
+        const assets = await fetchMemoryAssets()
+        const unreviewed = assets.filter(isReviewable)
+        pendingAssets.value = [...unreviewed]
+        modeTotal.value = unreviewed.length
+      } else if (mode === 'duplicates') {
+        const groups = await fetchDuplicates()
+        const allAssets = groups.flatMap(g => g.assets)
+        const unreviewed = allAssets.filter(isReviewable)
+        pendingAssets.value = [...unreviewed]
+        modeTotal.value = unreviewed.length
+      } else if (mode === 'recents') {
+        const assets = await fetchRecentAssets()
+        const unreviewed = assets.filter(isReviewable)
+        pendingAssets.value = [...unreviewed]
+        modeTotal.value = unreviewed.length
+      } else {
+        // random — use existing logic (no pending assets, fetchNextAsset uses random)
+        modeTotal.value = 0
+      }
+
+      currentAsset.value = await fetchNextAsset()
+      if (currentAsset.value) {
+        preloadNextAsset()
+      } else {
+        error.value = 'No more photos to review!'
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to load'
+    } finally {
+      uiStore.setLoading(false)
+    }
+  }
+
   return {
     currentAsset,
     nextAsset,
     error,
+    modeTotal,
     testConnection,
     loadInitialAsset,
+    loadMode,
     keepPhoto,
     keepPhotoToAlbum,
     toggleFavorite,
@@ -600,5 +760,11 @@ export function useImmich() {
     getAuthHeaders,
     fetchAlbums,
     addAssetToAlbum,
+    fetchTimeBuckets,
+    fetchAssetsByMonth,
+    fetchMemoryAssets,
+    fetchDuplicates,
+    fetchFilteredRandom,
+    resetReviewFlow,
   }
 }

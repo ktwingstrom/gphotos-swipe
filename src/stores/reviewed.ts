@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
-import { useAuthStore } from '@/stores/auth'
+import { ref } from 'vue'
 
 type ReviewDecision = 'keep' | 'delete'
 
@@ -10,27 +9,20 @@ interface ReviewedPayload {
   deleted: string[]
 }
 
-const STORAGE_PREFIX = 'immich-swipe-reviewed'
+const STORAGE_KEY = 'gphotos-swipe-reviewed'
 const STORAGE_VERSION = 1
 
 export const useReviewedStore = defineStore('reviewed', () => {
-  const authStore = useAuthStore()
   const kept = ref<Set<string>>(new Set())
   const deleted = ref<Set<string>>(new Set())
   const initialized = ref(false)
-
-  const storageKey = computed(() => {
-    const server = authStore.serverUrl || 'unknown-server'
-    const user = authStore.currentUserName || 'default-user'
-    return `${STORAGE_PREFIX}:${server}:${user}`
-  })
 
   function loadFromStorage() {
     initialized.value = false
     kept.value = new Set()
     deleted.value = new Set()
 
-    const raw = localStorage.getItem(storageKey.value)
+    const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) {
       initialized.value = true
       return
@@ -56,7 +48,7 @@ export const useReviewedStore = defineStore('reviewed', () => {
       kept: Array.from(kept.value),
       deleted: Array.from(deleted.value),
     }
-    localStorage.setItem(storageKey.value, JSON.stringify(payload))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
   }
 
   function isReviewed(id: string): boolean {
@@ -89,27 +81,11 @@ export const useReviewedStore = defineStore('reviewed', () => {
   }
 
   function resetReviewed() {
-    const user = authStore.currentUserName || 'default-user'
-    const prefix = `${STORAGE_PREFIX}:`
-    const keysToRemove: string[] = []
-
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (!key || !key.startsWith(prefix)) continue
-      if (key.endsWith(`:${user}`)) {
-        keysToRemove.push(key)
-      }
-    }
-
-    if (keysToRemove.length === 0) {
-      localStorage.removeItem(storageKey.value)
-    } else {
-      keysToRemove.forEach((key) => localStorage.removeItem(key))
-    }
+    localStorage.removeItem(STORAGE_KEY)
     loadFromStorage()
   }
 
-  watch(storageKey, () => loadFromStorage(), { immediate: true })
+  loadFromStorage()
 
   return {
     isReviewed,
