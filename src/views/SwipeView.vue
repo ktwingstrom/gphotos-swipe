@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useGooglePhotos, type SwipeMode, type ContentFilter } from '@/composables/useGooglePhotos'
+import { useImmich, type SwipeMode, type ContentFilter } from '@/composables/useImmich'
+import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { usePreferencesStore } from '@/stores/preferences'
-import type { GoogleAlbum } from '@/types/googlePhotos'
+import type { ImmichAlbum } from '@/types/immich'
 import SwipeCard from '@/components/SwipeCard.vue'
 import AlbumPicker from '@/components/AlbumPicker.vue'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const uiStore = useUiStore()
 const preferencesStore = usePreferencesStore()
 
@@ -20,11 +22,12 @@ const {
   loadMode,
   keepPhoto,
   keepPhotoToAlbum,
+  toggleFavorite,
   deletePhoto,
   undoLastAction,
   canUndo,
   fetchAlbums,
-} = useGooglePhotos()
+} = useImmich()
 
 const mode = computed(() => (route.query.mode as SwipeMode) || 'random')
 const year = computed(() => route.query.year ? Number(route.query.year) : undefined)
@@ -42,7 +45,7 @@ const progressLabel = computed(() => {
 
 const timeAgo = computed(() => {
   if (!currentAsset.value) return ''
-  const d = new Date(currentAsset.value.mediaMetadata.creationTime)
+  const d = new Date(currentAsset.value.fileCreatedAt)
   const diff = Date.now() - d.getTime()
   const secs = Math.floor(diff / 1000)
   if (secs < 60) return `${secs} sec. ago`
@@ -59,7 +62,7 @@ const timeAgo = computed(() => {
 const showAlbumPicker = ref(false)
 const isLoadingAlbums = ref(false)
 const albumsError = ref<string | null>(null)
-const albums = ref<GoogleAlbum[]>([])
+const albums = ref<ImmichAlbum[]>([])
 
 async function ensureAlbumsLoaded() {
   if (albums.value.length > 0) return
@@ -79,7 +82,7 @@ async function openAlbumPicker() {
   showAlbumPicker.value = true
 }
 
-async function handleAlbumSelected(album: GoogleAlbum) {
+async function handleAlbumSelected(album: ImmichAlbum) {
   await keepPhotoToAlbum(album)
   showAlbumPicker.value = false
   sessionReviewed.value++
@@ -103,18 +106,17 @@ async function handleDelete() {
   uiStore.recordActivity()
 }
 
-async function handleShare() {
-  if (!currentAsset.value) return
-  const url = currentAsset.value.productUrl || ''
-  if (!url) return
-  try {
-    if (navigator.share) {
-      await navigator.share({ url })
-    } else {
-      await navigator.clipboard.writeText(url)
-      uiStore.toast('Link copied to clipboard', 'success', 2000)
-    }
-  } catch {}
+async function handleFavorite() {
+  await toggleFavorite()
+}
+
+function openInImmich() {
+  if (!currentAsset.value || !authStore.immichBaseUrl) return
+  const base = authStore.immichBaseUrl.endsWith('/')
+    ? authStore.immichBaseUrl
+    : `${authStore.immichBaseUrl}/`
+  const url = `${base}photos/${encodeURIComponent(currentAsset.value.id)}`
+  window.open(url, '_blank', 'noopener')
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -125,6 +127,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'ArrowRight') { e.preventDefault(); handleKeep() }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); handleDelete() }
   else if (e.key === 'ArrowUp' || ((e.ctrlKey || e.metaKey) && e.key === 'z')) { e.preventDefault(); undoLastAction() }
+  else if (e.key.toLowerCase() === 'f') { e.preventDefault(); handleFavorite() }
   else if (/^[0-9]$/.test(e.key)) {
     const albumId = preferencesStore.albumHotkeys[e.key]
     if (!albumId) { uiStore.toast(`No album for key ${e.key}`, 'info', 2000); return }
@@ -215,13 +218,26 @@ watch(error, checkCompletion)
       v-if="currentAsset"
       class="absolute right-4 top-1/2 -translate-y-1/2 z-10 flex flex-col gap-4"
     >
-      <!-- Share (Google Photos link) -->
+      <!-- Open in Immich -->
       <button
-        @click="handleShare"
+        @click="openInImmich"
         class="w-11 h-11 rounded-full bg-black/40 flex items-center justify-center active:bg-black/60 transition-colors"
+        title="Open in Immich"
       >
         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        </svg>
+      </button>
+
+      <!-- Favorite -->
+      <button
+        @click="handleFavorite"
+        class="w-11 h-11 rounded-full bg-black/40 flex items-center justify-center active:bg-black/60 transition-colors"
+        :class="{ 'text-pink-400': currentAsset.isFavorite }"
+        title="Toggle favorite (F)"
+      >
+        <svg class="w-5 h-5" :fill="currentAsset.isFavorite ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
         </svg>
       </button>
 
@@ -229,6 +245,7 @@ watch(error, checkCompletion)
       <button
         @click="openAlbumPicker"
         class="w-11 h-11 rounded-full bg-black/40 flex items-center justify-center active:bg-black/60 transition-colors"
+        title="Add to album"
       >
         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />

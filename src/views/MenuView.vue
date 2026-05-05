@@ -1,23 +1,24 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useGooglePhotos } from '@/composables/useGooglePhotos'
+import { useImmich } from '@/composables/useImmich'
 import { useUiStore } from '@/stores/ui'
 import { usePreferencesStore } from '@/stores/preferences'
-import { useGoogleAuthStore } from '@/stores/googleAuth'
-import type { TimeBucket } from '@/types/googlePhotos'
+import { useAuthStore } from '@/stores/auth'
+import type { TimeBucket } from '@/types/immich'
 import ContentFilterSheet from '@/components/ContentFilterSheet.vue'
 import StreakCalendar from '@/components/StreakCalendar.vue'
 import type { ContentFilter } from '@/stores/preferences'
 
 const router = useRouter()
-const { fetchTimeBuckets, fetchMemoryAssets } = useGooglePhotos()
+const { fetchTimeBuckets, fetchMemoryAssets, fetchDuplicates } = useImmich()
 const uiStore = useUiStore()
 const preferencesStore = usePreferencesStore()
-const authStore = useGoogleAuthStore()
+const authStore = useAuthStore()
 
 const buckets = ref<TimeBucket[]>([])
 const memoryCount = ref(0)
+const duplicateCount = ref(0)
 const showContentFilter = ref(false)
 const showStreak = ref(false)
 const showSettings = ref(false)
@@ -57,6 +58,13 @@ const featuredModes = computed<FeaturedMode[]>(() => [
     gradient: 'linear-gradient(135deg, #f97316, #ec4899)',
     badge: memoryCount.value > 0 ? memoryCount.value : null,
     iconPath: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
+  },
+  {
+    id: 'duplicates',
+    label: 'duplicates',
+    gradient: 'linear-gradient(135deg, #ef4444, #b91c1c)',
+    badge: duplicateCount.value > 0 ? duplicateCount.value : null,
+    iconPath: 'M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2',
   },
 ])
 
@@ -109,18 +117,24 @@ function navigateToMonth(b: TimeBucket) {
 }
 
 function logout() {
-  authStore.clearAuth()
+  authStore.clearConfig()
   showSettings.value = false
   router.push('/login')
 }
 
 onMounted(async () => {
-  buckets.value = fetchTimeBuckets()
+  buckets.value = await fetchTimeBuckets()
   try {
     const mems = await fetchMemoryAssets()
     memoryCount.value = mems.length
   } catch {
     memoryCount.value = 0
+  }
+  try {
+    const groups = await fetchDuplicates()
+    duplicateCount.value = groups.reduce((acc, g) => acc + g.assets.length, 0)
+  } catch {
+    duplicateCount.value = 0
   }
 })
 </script>
@@ -129,7 +143,7 @@ onMounted(async () => {
   <div class="viewport-fit flex flex-col bg-[#F2B19A] overflow-hidden">
     <!-- Header -->
     <div class="flex items-center justify-between px-4 py-3 safe-area-top flex-shrink-0">
-      <h1 class="font-anton text-4xl italic tracking-tight text-black">gphotos-swipe</h1>
+      <h1 class="font-anton text-4xl italic tracking-tight text-black">immich-swipe</h1>
       <div class="flex items-center gap-2">
         <!-- Streak -->
         <button
@@ -193,7 +207,10 @@ onMounted(async () => {
         >
           {{ formatBucketLabel(bucket) }}
         </span>
-        <div v-if="!isBucketCompleted(bucket)" class="text-white/60 text-xl font-bold">▶▶</div>
+        <div class="flex items-center gap-2 text-white/80">
+          <span v-if="bucket.count" class="text-sm font-bold">{{ bucket.count }}</span>
+          <div v-if="!isBucketCompleted(bucket)" class="text-white/60 text-xl font-bold">▶▶</div>
+        </div>
       </div>
 
       <!-- Bottom padding -->

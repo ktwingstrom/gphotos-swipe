@@ -602,7 +602,7 @@ export function useImmich() {
     }
   }
 
-  async function fetchAssetsByMonth(year: number, month: number): Promise<ImmichAsset[]> {
+  async function fetchAssetsByMonth(year: number, month: number, contentFilter: ContentFilter = 'any'): Promise<ImmichAsset[]> {
     const from = new Date(Date.UTC(year, month - 1, 1)).toISOString()
     const to = new Date(Date.UTC(year, month, 1)).toISOString()
     try {
@@ -613,6 +613,7 @@ export function useImmich() {
         size: 1000,
         page: 1,
       }
+      if (contentFilter !== 'any') body.assetType = [contentFilter]
       const response = await apiRequest<MetadataSearchResponse>('/search/metadata', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -624,13 +625,15 @@ export function useImmich() {
     }
   }
 
-  async function fetchMemoryAssets(): Promise<ImmichAsset[]> {
+  async function fetchMemoryAssets(contentFilter: ContentFilter = 'any'): Promise<ImmichAsset[]> {
     try {
       const memories = await apiRequest<ImmichMemory[]>('/memories')
       if (!Array.isArray(memories)) return []
-      return memories
+      const assets = memories
         .filter(m => m.type === 'on_this_day')
         .flatMap(m => m.assets || [])
+      if (contentFilter === 'any') return assets
+      return assets.filter(a => a.type === contentFilter)
     } catch {
       return []
     }
@@ -645,7 +648,7 @@ export function useImmich() {
     }
   }
 
-  async function fetchRecentAssets(): Promise<ImmichAsset[]> {
+  async function fetchRecentAssets(contentFilter: ContentFilter = 'any'): Promise<ImmichAsset[]> {
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
     const now = new Date().toISOString()
     try {
@@ -656,6 +659,7 @@ export function useImmich() {
         size: 1000,
         page: 1,
       }
+      if (contentFilter !== 'any') body.assetType = [contentFilter]
       const response = await apiRequest<MetadataSearchResponse>('/search/metadata', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -702,29 +706,36 @@ export function useImmich() {
       resetReviewFlow()
       modeTotal.value = 0
 
+      const cf: ContentFilter = options?.contentFilter ?? 'any'
+
       if (mode === 'month' && options?.year && options?.month) {
-        const assets = await fetchAssetsByMonth(options.year, options.month)
+        const assets = await fetchAssetsByMonth(options.year, options.month, cf)
         const unreviewed = assets.filter(isReviewable)
         pendingAssets.value = [...unreviewed]
         modeTotal.value = unreviewed.length
       } else if (mode === 'on-this-day') {
-        const assets = await fetchMemoryAssets()
+        const assets = await fetchMemoryAssets(cf)
         const unreviewed = assets.filter(isReviewable)
         pendingAssets.value = [...unreviewed]
         modeTotal.value = unreviewed.length
       } else if (mode === 'duplicates') {
         const groups = await fetchDuplicates()
         const allAssets = groups.flatMap(g => g.assets)
-        const unreviewed = allAssets.filter(isReviewable)
+        const unreviewed = allAssets.filter(a => isReviewable(a) && (cf === 'any' || a.type === cf))
         pendingAssets.value = [...unreviewed]
         modeTotal.value = unreviewed.length
       } else if (mode === 'recents') {
-        const assets = await fetchRecentAssets()
+        const assets = await fetchRecentAssets(cf)
         const unreviewed = assets.filter(isReviewable)
         pendingAssets.value = [...unreviewed]
         modeTotal.value = unreviewed.length
+      } else if (cf !== 'any') {
+        // random + filter
+        const candidate = await fetchFilteredRandom(cf)
+        if (candidate) pendingAssets.value = [candidate]
+        modeTotal.value = 0
       } else {
-        // random — use existing logic (no pending assets, fetchNextAsset uses random)
+        // random (any) — use existing random logic via fetchNextAsset
         modeTotal.value = 0
       }
 

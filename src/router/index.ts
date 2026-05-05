@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useGoogleAuthStore } from '@/stores/googleAuth'
+import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -21,26 +21,45 @@ const router = createRouter({
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
     },
+    {
+      path: '/select-user',
+      name: 'select-user',
+      component: () => import('@/views/UserSelectView.vue'),
+    },
   ],
 })
 
-router.beforeEach(async (to, _from, next) => {
-  const authStore = useGoogleAuthStore()
+router.beforeEach((to, _from, next) => {
+  const authStore = useAuthStore()
 
-  // Handle OAuth callback — Google redirects to root with ?code=...
-  const code = to.query.code as string | undefined
-  if (code) {
-    const success = await authStore.handleOAuthCallback(code)
-    if (success) {
-      next({ path: '/', replace: true })
+  if (authStore.isLoggedIn) {
+    if (to.path === '/login' || to.path === '/select-user') {
+      next('/')
     } else {
-      next({ path: '/login', query: { error: 'auth_failed' }, replace: true })
+      next()
     }
     return
   }
 
-  if (authStore.isLoggedIn) {
-    if (to.path === '/login') {
+  if (to.path === '/login') {
+    if (authStore.hasEnvConfig) {
+      if (authStore.hasSingleEnvUser) {
+        authStore.autoLoginSingleUser()
+        next('/')
+      } else {
+        next('/select-user')
+      }
+    } else {
+      next()
+    }
+    return
+  }
+
+  if (to.path === '/select-user') {
+    if (!authStore.hasEnvConfig) {
+      next('/login')
+    } else if (authStore.hasSingleEnvUser) {
+      authStore.autoLoginSingleUser()
       next('/')
     } else {
       next()
@@ -49,7 +68,16 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (to.meta.requiresAuth) {
-    next('/login')
+    if (authStore.hasEnvConfig) {
+      if (authStore.hasSingleEnvUser) {
+        authStore.autoLoginSingleUser()
+        next()
+      } else {
+        next('/select-user')
+      }
+    } else {
+      next('/login')
+    }
     return
   }
 

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { GoogleAlbum } from '@/types/googlePhotos'
+import type { ImmichAlbum } from '@/types/immich'
 
 const props = defineProps<{
   open: boolean
-  albums: GoogleAlbum[]
+  albums: ImmichAlbum[]
   loading: boolean
   error: string | null
   hotkeys: Record<string, string>
@@ -12,7 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
-  select: [GoogleAlbum]
+  select: [ImmichAlbum]
   assignHotkey: [string, string | null]
 }>()
 
@@ -32,7 +32,7 @@ const hotkeyOptions = computed(() => props.albums.map((album) => ({
   value: album.id,
 })))
 
-function handleSelect(album: GoogleAlbum) {
+function handleSelect(album: ImmichAlbum) {
   emit('select', album)
 }
 
@@ -133,8 +133,8 @@ watch(
             >
               <div>
                 <p class="font-medium text-gray-900 dark:text-gray-100">{{ album.albumName }}</p>
-                <p v-if="album.mediaItemsCount" class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ album.mediaItemsCount }} items
+                <p v-if="album.assetCount" class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ album.assetCount }} items
                 </p>
               </div>
               <button

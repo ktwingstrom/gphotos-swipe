@@ -1,70 +1,93 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
-import { useGoogleAuthStore } from '@/stores/googleAuth'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
+import { useImmich } from '@/composables/useImmich'
 
-const route = useRoute()
-const authStore = useGoogleAuthStore()
+const router = useRouter()
+const authStore = useAuthStore()
+const uiStore = useUiStore()
+const { testConnection } = useImmich()
 
+const serverUrl = ref('')
+const apiKey = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
 
 onMounted(() => {
-  if (route.query.error === 'auth_failed') {
-    errorMessage.value = 'Sign-in failed. Please try again.'
+  const stored = authStore.getStoredConfig()
+  if (stored) {
+    serverUrl.value = stored.serverUrl
+    apiKey.value = stored.apiKey
   }
 })
 
 async function signIn() {
+  if (!serverUrl.value.trim() || !apiKey.value.trim()) {
+    errorMessage.value = 'Server URL and API key are required.'
+    return
+  }
   isLoading.value = true
   errorMessage.value = ''
-  try {
-    await authStore.startOAuthFlow()
-  } catch {
-    errorMessage.value = 'Failed to start sign-in. Please try again.'
-    isLoading.value = false
+
+  authStore.setConfig(serverUrl.value.trim(), apiKey.value.trim(), 'You')
+  const ok = await testConnection()
+
+  if (ok) {
+    uiStore.toast('Connected ✓', 'success')
+    router.push('/')
+  } else {
+    errorMessage.value = 'Connection failed. Check the URL, API key, and CORS.'
+    authStore.clearConfig()
   }
+  isLoading.value = false
 }
 </script>
 
 <template>
   <div class="min-h-screen flex flex-col items-center justify-center p-8 bg-[#F2B19A]">
-    <div class="w-full max-w-sm flex flex-col items-center gap-8">
-      <!-- Title -->
+    <div class="w-full max-w-sm flex flex-col items-center gap-6">
       <div class="text-center">
-        <h1 class="font-anton text-5xl italic tracking-tight text-black mb-2">gphotos-swipe</h1>
-        <p class="text-black/60 text-base">swipe through your Google Photos</p>
+        <h1 class="font-anton text-5xl italic tracking-tight text-black mb-2">immich-swipe</h1>
+        <p class="text-black/60 text-base">swipe through your Immich library</p>
       </div>
 
-      <!-- Sign in button -->
-      <div class="w-full flex flex-col items-center gap-4">
+      <form class="w-full flex flex-col gap-3" @submit.prevent="signIn">
+        <label class="text-xs font-bold uppercase tracking-widest text-black/50">Immich server URL</label>
+        <input
+          v-model="serverUrl"
+          type="url"
+          placeholder="https://immich.example.com"
+          autocomplete="url"
+          class="w-full px-4 py-3 rounded-2xl bg-white/80 text-black placeholder:text-black/30 focus:outline-none focus:ring-2 focus:ring-black/30"
+        />
+
+        <label class="text-xs font-bold uppercase tracking-widest text-black/50 mt-2">API key</label>
+        <input
+          v-model="apiKey"
+          type="password"
+          placeholder="immich api key"
+          autocomplete="current-password"
+          class="w-full px-4 py-3 rounded-2xl bg-white/80 text-black placeholder:text-black/30 focus:outline-none focus:ring-2 focus:ring-black/30"
+        />
+
         <button
-          @click="signIn"
+          type="submit"
           :disabled="isLoading"
-          class="w-full flex items-center justify-center gap-3 px-6 py-4 bg-white rounded-2xl shadow-md font-semibold text-gray-800 text-base active:bg-gray-50 transition-colors disabled:opacity-60"
+          class="mt-3 w-full px-6 py-4 rounded-2xl bg-black text-white font-bold tracking-wide active:bg-black/80 transition-colors disabled:opacity-60"
         >
-          <svg v-if="!isLoading" viewBox="0 0 24 24" class="w-5 h-5 flex-shrink-0">
-            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-          </svg>
-          <svg v-else class="w-5 h-5 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-          </svg>
-          <span>{{ isLoading ? 'Redirecting...' : 'Sign in with Google' }}</span>
+          {{ isLoading ? 'Connecting…' : 'Sign in' }}
         </button>
 
         <div v-if="errorMessage" class="w-full p-3 rounded-xl bg-red-100 text-red-700 text-sm text-center">
           {{ errorMessage }}
         </div>
-      </div>
+      </form>
 
-      <!-- Info -->
       <p class="text-black/40 text-xs text-center leading-relaxed max-w-xs">
-        Access is read-only + album creation.<br>
-        "Deleted" photos are moved to a "To Delete" album.
+        Generate an API key in Immich under Account → API Keys.<br>
+        Stored locally in this browser. Left-swipe sends photos to Immich's trash (30-day auto-purge).
       </p>
     </div>
   </div>

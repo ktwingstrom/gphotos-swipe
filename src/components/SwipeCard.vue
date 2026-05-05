@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useSwipe } from '@/composables/useSwipe'
-import type { GoogleMediaItem } from '@/types/googlePhotos'
+import { useAuthStore } from '@/stores/auth'
+import type { ImmichAsset } from '@/types/immich'
 
 const props = defineProps<{
-  asset: GoogleMediaItem
+  asset: ImmichAsset
 }>()
 
 const emit = defineEmits<{
@@ -12,16 +13,24 @@ const emit = defineEmits<{
   delete: []
 }>()
 
+const authStore = useAuthStore()
+
 const cardRef = ref<HTMLElement | null>(null)
 const imageLoaded = ref(false)
 const imageError = ref(false)
+const imageBlobUrl = ref<string | null>(null)
+const videoBlobUrl = ref<string | null>(null)
 const videoError = ref(false)
 const videoRef = ref<HTMLVideoElement | null>(null)
+let imageAbort: AbortController | null = null
+let videoAbort: AbortController | null = null
+
+const isVideo = computed(() => props.asset.type === 'VIDEO')
 
 const { isSwiping, swipeOffset, swipeDirection } = useSwipe(cardRef, {
   threshold: 100,
-  onSwipeRight: () => emit('delete'),
-  onSwipeLeft: () => emit('keep'),
+  onSwipeRight: () => emit('keep'),
+  onSwipeLeft: () => emit('delete'),
 })
 
 const cardStyle = computed(() => {
@@ -33,27 +42,110 @@ const cardStyle = computed(() => {
 })
 
 const keepOpacity = computed(() =>
-  swipeDirection.value === 'left' ? Math.min(Math.abs(swipeOffset.value) / 80, 1) : 0
-)
-const deleteOpacity = computed(() =>
   swipeDirection.value === 'right' ? Math.min(Math.abs(swipeOffset.value) / 80, 1) : 0
 )
+const deleteOpacity = computed(() =>
+  swipeDirection.value === 'left' ? Math.min(Math.abs(swipeOffset.value) / 80, 1) : 0
+)
 
-const isVideo = computed(() => props.asset.mimeType.startsWith('video/'))
+function buildAssetUrl(path: string): string {
+  if (!authStore.immichBaseUrl) return ''
+  const normalized = path.startsWith('/') ? path.slice(1) : path
+  return `${authStore.immichBaseUrl}${authStore.proxyBaseUrl}/assets/${props.asset.id}/${normalized}`
+}
 
-const imageUrl = computed(() => `${props.asset.baseUrl}=w2000-h2000`)
-const videoThumbUrl = computed(() => `${props.asset.baseUrl}=w800-h800`)
-const videoSrc = computed(() => `${props.asset.baseUrl}=dv`)
+function authHeaders(): Record<string, string> {
+  return {
+    'x-api-key': authStore.apiKey,
+    'X-Target-Host': authStore.immichBaseUrl,
+  }
+}
 
-watch(() => props.asset.id, () => {
+function revokeImageBlob() {
+  if (imageBlobUrl.value) {
+    URL.revokeObjectURL(imageBlobUrl.value)
+    imageBlobUrl.value = null
+  }
+}
+
+function revokeVideoBlob() {
+  if (videoBlobUrl.value) {
+    URL.revokeObjectURL(videoBlobUrl.value)
+    videoBlobUrl.value = null
+  }
+}
+
+async function fetchImage() {
+  imageAbort?.abort()
+  imageAbort = new AbortController()
   imageLoaded.value = false
   imageError.value = false
+  revokeImageBlob()
+
+  const url = buildAssetUrl('thumbnail?size=preview')
+  if (!url) {
+    imageError.value = true
+    return
+  }
+
+  try {
+    const resp = await fetch(url, { headers: authHeaders(), signal: imageAbort.signal })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const blob = await resp.blob()
+    imageBlobUrl.value = URL.createObjectURL(blob)
+    imageLoaded.value = true
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') return
+    imageError.value = true
+  }
+}
+
+async function fetchVideo() {
+  videoAbort?.abort()
+  videoAbort = new AbortController()
   videoError.value = false
+  revokeVideoBlob()
+
+  const url = buildAssetUrl('original')
+  if (!url) {
+    videoError.value = true
+    return
+  }
+
+  try {
+    const resp = await fetch(url, { headers: authHeaders(), signal: videoAbort.signal })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const blob = await resp.blob()
+    videoBlobUrl.value = URL.createObjectURL(blob)
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') return
+    videoError.value = true
+  }
+}
+
+function loadAsset() {
+  if (isVideo.value) {
+    fetchImage() // poster from thumbnail
+    fetchVideo()
+  } else {
+    fetchImage()
+  }
+}
+
+watch(() => props.asset.id, () => {
   if (videoRef.value) {
     videoRef.value.pause()
     videoRef.value.currentTime = 0
   }
-}, { immediate: false })
+  loadAsset()
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  imageAbort?.abort()
+  videoAbort?.abort()
+  revokeImageBlob()
+  revokeVideoBlob()
+})
 </script>
 
 <template>
@@ -64,7 +156,7 @@ watch(() => props.asset.id, () => {
   >
     <!-- Loading state (image not yet loaded) -->
     <div
-      v-if="!isVideo && !imageLoaded && !imageError"
+      v-if="!imageLoaded && !imageError"
       class="absolute inset-0 bg-zinc-900 flex items-center justify-center"
     >
       <div class="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -72,7 +164,7 @@ watch(() => props.asset.id, () => {
 
     <!-- Image error -->
     <div
-      v-if="(!isVideo && imageError) || (isVideo && videoError)"
+      v-if="(!isVideo && imageError) || (isVideo && videoError && !videoBlobUrl)"
       class="absolute inset-0 bg-zinc-900 flex flex-col items-center justify-center gap-3 text-white/40"
     >
       <svg class="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -83,28 +175,26 @@ watch(() => props.asset.id, () => {
 
     <!-- Image -->
     <img
-      v-if="!isVideo"
-      :src="imageUrl"
-      :alt="asset.filename"
+      v-if="!isVideo && imageBlobUrl"
+      :src="imageBlobUrl"
+      :alt="asset.originalFileName"
       class="w-full h-full object-contain"
-      :class="{ 'opacity-0': !imageLoaded && !imageError }"
       draggable="false"
-      @load="imageLoaded = true"
-      @error="imageError = true"
     />
 
     <!-- Video poster while loading, then video -->
-    <template v-else>
+    <template v-else-if="isVideo">
       <img
-        v-if="!videoError"
-        :src="videoThumbUrl"
-        :alt="asset.filename"
+        v-if="imageBlobUrl && !videoBlobUrl"
+        :src="imageBlobUrl"
+        :alt="asset.originalFileName"
         class="absolute inset-0 w-full h-full object-contain"
         draggable="false"
       />
       <video
+        v-if="videoBlobUrl"
         ref="videoRef"
-        :src="videoSrc"
+        :src="videoBlobUrl"
         class="absolute inset-0 w-full h-full object-contain"
         playsinline
         webkit-playsinline
@@ -118,10 +208,10 @@ watch(() => props.asset.id, () => {
 
     <!-- KEEP indicator -->
     <div
-      class="absolute top-10 left-5 pointer-events-none"
+      class="absolute top-10 right-5 pointer-events-none"
       :style="{ opacity: keepOpacity }"
     >
-      <div class="border-4 border-green-400 rounded-xl px-4 py-2 rotate-[-12deg]">
+      <div class="border-4 border-green-400 rounded-xl px-4 py-2 rotate-[12deg]">
         <span class="font-anton text-3xl text-green-400 tracking-widest">KEEP</span>
       </div>
     </div>
@@ -131,7 +221,7 @@ watch(() => props.asset.id, () => {
       class="absolute top-10 left-5 pointer-events-none"
       :style="{ opacity: deleteOpacity }"
     >
-      <div class="border-4 border-purple-400 rounded-xl px-4 py-2 rotate-[12deg]">
+      <div class="border-4 border-purple-400 rounded-xl px-4 py-2 rotate-[-12deg]">
         <span class="font-anton text-3xl text-purple-400 tracking-widest">DELETE</span>
       </div>
     </div>

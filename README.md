@@ -1,67 +1,96 @@
-# gphotos-swipe
+# Immich Swipe
 
-Swipe-review your Google Photos library: right = keep, left = sends it to a "To Delete" album you can empty later from the Google Photos app. Like a dating app, but for photos.
+Swipe-review your Immich library: right = keep, left = trash. Like a dating app, but for photos (and videos).
 
 ![Vue 3](https://img.shields.io/badge/Vue-3.x-4FC08D?logo=vue.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-4.x-06B6D4?logo=tailwindcss)
 
-> Originally built against Immich; pivoted to the Google Photos Library API. Old Immich code paths (`useImmich`, `auth` store, `vite-env.d.ts` user slots) still hang around but aren't wired into the active routes.
+> Briefly pivoted to Google Photos in early 2026. Reverted after Google's March 2025 Photos Library API restrictions made third-party library browsing impossible. Some commit history reflects that detour. The repo dir is still named `gphotos-swipe`; the project name is `immich-swipe`.
 
 ## What it does
 
-A mobile-first SPA for triaging your Google Photos library one photo at a time. Pick a mode, swipe through, build a streak.
+A mobile-first SPA for triaging your Immich library one asset at a time. Pick a mode, swipe through, build a streak.
 
 **Modes**
 
 | Mode | What you get |
 |---|---|
-| **Recents** | The last ~90 days |
-| **Random** | Paginated + shuffled batches across your whole library, optionally filtered to photos or videos |
-| **On this day** | Google Photos memories for today's month/day |
-| **By month** | Tap any of the last 36 monthly tiles to review just that month. Completed months get a strikethrough |
+| **Recents** | The last 90 days, newest first |
+| **Random** | Random unreviewed assets, optionally filtered to photos or videos |
+| **On this day** | Immich's `on_this_day` memories for today |
+| **Duplicates** | Everything in Immich's duplicate-detection results, so you can pick favorites and trash the rest |
+| **By month** | Tap any monthly tile (real counts from Immich's `/timeline/buckets`) to review just that month. Completed months get a strikethrough |
 
-**Why "delete" isn't really delete**
+**"Delete" = Immich trash**
 
-The Google Photos Library API doesn't expose a real delete. Instead, the app auto-creates a `To Delete` album on first use and adds left-swiped photos to it. You then open Google Photos, select all, and trash them by hand. The album ID is cached in `localStorage` (`gphotos-to-delete-album-id`).
+Left-swipe calls `DELETE /assets` with `force: false`, which moves the asset to Immich's trash (default 30-day retention before permanent purge — configurable in Immich admin). Undo within the swipe session calls `POST /trash/restore/assets` and brings it back. Empty trash from Immich's UI when you're satisfied.
 
 ## Controls
 
 | Action | Gesture / Key | Button |
 |---|---|---|
 | Keep | Swipe right / `→` | KEEP |
-| Delete (→ "To Delete" album) | Swipe left / `←` | DELETE |
+| Delete (→ trash) | Swipe left / `←` | DELETE |
 | Undo last action | `Ctrl/⌘+Z` or `↑` | ↶ |
+| Favorite | `F` | ♡ |
 | Add to album | `0–9` (configurable) | + |
-| Share Google Photos link | — | share icon |
+| Open in Immich | — | ↗ |
 
-Reviewed asset IDs and stats are persisted in `localStorage` so you don't see the same photo twice across sessions. Daily activity feeds a streak counter on the home screen.
+Reviewed asset IDs and stats are persisted in `localStorage` keyed by `<server>:<user>`, so each Immich account has its own independent decision history. Daily activity feeds a streak counter on the home screen.
 
 ## Configuration
 
-You need a Google OAuth client (Web application) with the Google Photos Library API enabled.
+**Required:** an Immich API key per user. Generate one in Immich under **Account → API Keys**. Each key is scoped to one user, so each person gets their own swipe deck of just their photos.
 
-**Required scopes**
+**Minimum API key permissions:** `asset.read`, `asset.delete`. For the album picker, favorites, duplicates, and memories: also grant `asset.update`, `album.read`, `album.update`, `memory.read`, `duplicate.read`.
 
-- `https://www.googleapis.com/auth/photoslibrary.readonly`
-- `https://www.googleapis.com/auth/photoslibrary.appendonly`
-
-**Required env vars**
+### Build-time `.env` (multi-user, recommended for self-hosted)
 
 ```bash
-VITE_GOOGLE_CLIENT_ID=...
-VITE_GOOGLE_CLIENT_SECRET=...
+VITE_SERVER_URL=https://immich.example.com
+VITE_USER_1_NAME=Kevin
+VITE_USER_1_API_KEY=...
+VITE_USER_2_NAME=Partner
+VITE_USER_2_API_KEY=...
 ```
 
-These are baked into the bundle at build time, so anyone with the deployed app can read them. **Only deploy this somewhere private** (LAN, Tailscale, password-gated reverse proxy, etc.). Don't ship it to a public URL with a long-lived client secret embedded.
+Behavior:
+- 1 user → auto-login
+- >1 users → user-select screen at `/select-user`
+- no `.env` → manual login form at `/login`, stored in `localStorage` under `immich-swipe-config`
 
-**Authorized redirect URI**
+`VITE_*` vars are baked into the bundle at build time. Anyone with access to the deployed JS can read them — only deploy on a private network (LAN, Tailscale, password-gated reverse proxy). For public-ish deployments, omit `.env` and have each person log in manually.
 
-Whatever URL the app is served from, exactly. For local dev: `http://localhost:5173`. For Docker: `https://<your-host>` (must be HTTPS — see below).
+### Slot count
 
-### HTTPS is mandatory in production
+User slots are wired up to `VITE_USER_5_*` in `src/vite-env.d.ts`, `Dockerfile`, and `docker-compose.yml`. To go beyond 5, widen those three files.
 
-The PKCE flow uses `crypto.subtle`, which browsers only expose on secure contexts. `localhost` counts as secure for development; raw LAN IPs (`http://192.168.x.x`) do not. For non-localhost deployments, terminate TLS in front of the container — Tailscale serve, Caddy, Nginx Proxy Manager, Cloudflare Tunnel, etc.
+## API / CORS / Proxy
+
+The browser talks to Immich's API directly with the `x-api-key` header. Two ways to make CORS work:
+
+### Option A: same-origin via the bundled nginx proxy (recommended)
+
+Set `VITE_SERVER_URL` to this app's own origin plus `/immich-api`, e.g. `https://swipe.kredik-shaw.tiffany-cod.ts.net/immich-api`. The bundled `nginx.conf` exposes a `/immich-api/` location that strips the prefix and forwards to the Immich server given by the `X-Target-Host` header (which the client sends per request). All API calls and image fetches go through same-origin → no CORS, no preflights.
+
+**Default fallback:** if `X-Target-Host` is missing, nginx forwards to `http://immich-server:2283`, useful when this app shares a Docker network with the Immich container.
+
+**SSRF caveat:** the nginx proxy uses a client-supplied header for the upstream. If the app's origin is reachable beyond your trusted network, this can be abused as an open proxy. Keep it on Tailscale / LAN.
+
+### Option B: direct CORS
+
+Point `VITE_SERVER_URL` at Immich directly (`https://immich.example.com`). Configure CORS on Immich's reverse proxy:
+
+```nginx
+add_header 'Access-Control-Allow-Origin' '*' always;
+add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, PATCH, DELETE, OPTIONS' always;
+add_header 'Access-Control-Allow-Headers' 'X-Api-Key, X-Target-Host, User-Agent, Content-Type, Authorization, Range, Accept' always;
+add_header 'Access-Control-Expose-Headers' 'Content-Length, Content-Range, Accept-Ranges' always;
+if ($request_method = OPTIONS) { return 204; }
+```
+
+See also: https://docs.immich.app/administration/reverse-proxy/
 
 ## Quickstart
 
@@ -69,11 +98,11 @@ The PKCE flow uses `crypto.subtle`, which browsers only expose on secure context
 
 ```bash
 npm install
-cp env.example .env   # fill in VITE_GOOGLE_CLIENT_ID and VITE_GOOGLE_CLIENT_SECRET
+cp env.example .env   # set VITE_SERVER_URL + at least one VITE_USER_*
 npm run dev
 ```
 
-Open `http://localhost:5173` and add it as an authorized redirect URI in Google Cloud Console.
+Open `http://localhost:5173`.
 
 ### Docker
 
@@ -83,38 +112,37 @@ cp env.example .env
 docker compose up --build
 ```
 
-App listens on port `2293`. Front it with HTTPS as noted above.
-
-`.env` values are passed as build args and embedded in the compiled bundle — changing them requires a rebuild (`docker compose build`).
+Listens on port `2293`. `.env` values are baked in at build time — changing `.env` requires `docker compose build`.
 
 ### GitHub Pages
 
-A workflow (`.github/workflows/`) builds and deploys to Pages on every push to `main`. URL ends up at `https://<owner>.github.io/<repo>/`. Pages serves HTTPS automatically, so PKCE works out of the box. Note: build args (your Google client ID/secret) need to be configured as GitHub Actions secrets if you go this route, otherwise the deployed app won't have OAuth credentials.
+`.github/workflows/pages.yml` builds and deploys to Pages on every push to `main`. URL: `https://<owner>.github.io/<repo>/`. Pages serves HTTPS automatically. Note: build args are not configured in the workflow, so the deployed Pages build has no embedded credentials — users authenticate via the manual login form.
 
 ### GHCR container
 
-A second workflow publishes a container image to `ghcr.io/<owner>/<repo>` on push to `main` and on `v*` tags.
+`.github/workflows/publish-ghcr.yml` publishes `ghcr.io/<owner>/<repo>` on push to `main` and `v*` tags. Same caveat as Pages: no build-time credentials in the workflow, so manual login only on that image.
 
 ## Stored data (localStorage)
 
 | Key | Purpose |
 |---|---|
-| `gphotos-swipe-auth` | Access token, refresh token, expiry |
-| `gphotos-to-delete-album-id` | Cached ID of the auto-created "To Delete" album |
-| `gphotos-swipe-reviewed` | Already-reviewed asset IDs + decision |
-| `gphotos-swipe-preferences` | Sort order, content filter, hide-completed, album hotkeys, completed months |
-| `immich-swipe-stats:<server>:<user>` | Keep/delete counters (legacy key name) |
-| `immich-swipe-streak` | Daily activity streak (legacy key name) |
-| `immich-swipe-theme`, `immich-swipe-skip-videos` | Carried over from the Immich era |
+| `immich-swipe-config` | Manual-login server URL + API key |
+| `immich-swipe-theme` | Dark/light pref |
+| `immich-swipe-skip-videos` | Skip videos toggle |
+| `immich-swipe-stats:<server>:<user>` | Keep/delete counters per account |
+| `immich-swipe-reviewed:<server>:<user>` | Reviewed asset IDs + decision per account |
+| `immich-swipe-streak` | Daily activity streak |
+| `gphotos-swipe-preferences` | Sort order, content filter, hide-completed, album hotkeys, completed months *(legacy key name from the GP detour — preferences live here, not under `immich-swipe-preferences`)* |
 
 ## Architecture
 
-- `src/stores/googleAuth.ts` — OAuth2 PKCE store. Generates `code_verifier`/`code_challenge` via `crypto.subtle`, exchanges the code for tokens, auto-refreshes, persists to `localStorage`.
-- `src/composables/useGooglePhotos.ts` — All Google Photos API calls. Mode loaders (recents/random/on-this-day/by-month), pagination, the "To Delete" album logic, undo history, album CRUD for the picker.
-- `src/router/index.ts` — Catches `?code=` on `/` after Google's OAuth redirect, runs `handleOAuthCallback`, and bounces to `/`.
-- `src/views/MenuView.vue` — Home screen with mode tiles + monthly tiles + streak + settings sheet.
-- `src/views/SwipeView.vue` — Full-screen swipe deck with progress, share, album hotkeys.
-- `src/types/googlePhotos.ts` — TypeScript types for the Google Photos API responses.
+- `src/stores/auth.ts` — Server URL + API key store. Parses `VITE_USER_*` slots, supports manual login, persists to localStorage.
+- `src/composables/useImmich.ts` — All Immich API calls. Mode loaders (recents/random/on-this-day/duplicates/by-month), pagination, trash + restore, favorites, album CRUD.
+- `src/router/index.ts` — Auth gate: routes through `/select-user` for multi-user `.env`, `/login` otherwise.
+- `src/views/MenuView.vue` — Home screen: mode tiles + month tiles + streak + settings sheet.
+- `src/views/SwipeView.vue` — Full-screen swipe deck with progress, favorite, share-to-Immich, album hotkeys.
+- `src/components/SwipeCard.vue` — Fetches images/videos as blobs with auth headers, renders via `URL.createObjectURL`.
+- `src/types/immich.ts` — TypeScript types for Immich API responses.
 
 ## Development scripts
 
@@ -122,4 +150,4 @@ A second workflow publishes a container image to `ghcr.io/<owner>/<repo>` on pus
 - `npm run build` (`vue-tsc -b && vite build`)
 - `npm run preview`
 - `npm run type-check`
-- `npm test` (Vitest)
+- `npm test` (Vitest — currently broken on `localStorage` setup, unrelated to features)
