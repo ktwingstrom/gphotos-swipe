@@ -68,29 +68,27 @@ User slots are wired up to `VITE_USER_5_*` in `src/vite-env.d.ts`, `Dockerfile`,
 
 ## API / CORS / Proxy
 
-The browser talks to Immich's API directly with the `x-api-key` header. Two ways to make CORS work:
+The browser talks to Immich's API with the `x-api-key` header. Two ways to make that work:
 
 ### Option A: same-origin via the bundled nginx proxy (recommended)
 
-Set `VITE_SERVER_URL` to this app's own origin plus `/immich-api`, e.g. `https://swipe.kredik-shaw.tiffany-cod.ts.net/immich-api`. The bundled `nginx.conf` exposes a `/immich-api/` location that strips the prefix and forwards to the Immich server given by the `X-Target-Host` header (which the client sends per request). All API calls and image fetches go through same-origin → no CORS, no preflights.
+Set `VITE_SERVER_URL` to this app's own origin (no path), e.g. `http://192.168.1.50:2293`. The bundled `nginx.conf` exposes a `/api/` location that forwards to `http://immich_server:2283/api/` on the shared Docker network. All API calls and image fetches stay same-origin → no CORS, no preflights.
 
-**Default fallback:** if `X-Target-Host` is missing, nginx forwards to `http://immich-server:2283`, useful when this app shares a Docker network with the Immich container.
-
-**SSRF caveat:** the nginx proxy uses a client-supplied header for the upstream. If the app's origin is reachable beyond your trusted network, this can be abused as an open proxy. Keep it on Tailscale / LAN.
+For this to work, the immich-swipe container must share a Docker network with the Immich container. The bundled `docker-compose.yml` does this by joining the external `immich_default` network (which Immich's official compose creates). If your Immich service is named differently, edit `nginx.conf` before building.
 
 ### Option B: direct CORS
 
-Point `VITE_SERVER_URL` at Immich directly (`https://immich.example.com`). Configure CORS on Immich's reverse proxy:
+Point `VITE_SERVER_URL` at Immich directly (`https://immich.example.com`) and configure CORS on Immich's reverse proxy:
 
 ```nginx
 add_header 'Access-Control-Allow-Origin' '*' always;
 add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, PATCH, DELETE, OPTIONS' always;
-add_header 'Access-Control-Allow-Headers' 'X-Api-Key, X-Target-Host, User-Agent, Content-Type, Authorization, Range, Accept' always;
+add_header 'Access-Control-Allow-Headers' 'X-Api-Key, User-Agent, Content-Type, Authorization, Range, Accept' always;
 add_header 'Access-Control-Expose-Headers' 'Content-Length, Content-Range, Accept-Ranges' always;
 if ($request_method = OPTIONS) { return 204; }
 ```
 
-See also: https://docs.immich.app/administration/reverse-proxy/
+In this mode you can drop the `networks:` block from `docker-compose.yml` since the container doesn't need to talk to Immich over Docker DNS. See also: https://docs.immich.app/administration/reverse-proxy/
 
 ## Quickstart
 

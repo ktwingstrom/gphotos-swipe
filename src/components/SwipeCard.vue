@@ -57,7 +57,6 @@ function buildAssetUrl(path: string): string {
 function authHeaders(): Record<string, string> {
   return {
     'x-api-key': authStore.apiKey,
-    'X-Target-Host': authStore.immichBaseUrl,
   }
 }
 

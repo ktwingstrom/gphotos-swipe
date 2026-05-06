@@ -1,14 +1,10 @@
-# Docker Compose
-
-version: "3.8"
-
 services:
   immich-swipe:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        # Pass environment variables at build time
+        # Build-time .env values are baked into the JS bundle.
         - VITE_SERVER_URL=${VITE_SERVER_URL:-}
         - VITE_USER_1_NAME=${VITE_USER_1_NAME:-}
         - VITE_USER_1_API_KEY=${VITE_USER_1_API_KEY:-}
@@ -24,4 +20,13 @@ services:
     restart: unless-stopped
     ports:
       - "2293:80"
+    networks:
+      # Share Immich's network so nginx can resolve `immich_server` by name.
+      # Disable this stanza (and the top-level networks block) if you're not
+      # co-locating with Immich; in that case set VITE_SERVER_URL directly to
+      # the Immich URL and configure CORS on Immich's reverse proxy instead.
+      - immich_default
 
+networks:
+  immich_default:
+    external: true
